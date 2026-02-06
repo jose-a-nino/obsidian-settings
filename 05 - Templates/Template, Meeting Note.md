@@ -1,5 +1,6 @@
 ---
-date: <% tp.file.creation_date() %>
+created: <% tp.file.creation_date() %>
+date: <% tp.file.creation_date("YYYY-MM-DD") %>
 type: meeting
 company:
 summary: " "
