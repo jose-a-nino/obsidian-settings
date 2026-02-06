@@ -2,7 +2,8 @@
 project_type:
   - Work Project
 type: project
-start_date: <% tp.file.creation_date() %>
+created: <% tp.file.creation_date() %>
+start_date: <% tp.file.creation_date("YYYY-MM-DD") %>
 due_date:
 status:
   - "{{Not Started / In Progress / Completed}}"
