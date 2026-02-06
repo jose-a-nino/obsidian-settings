@@ -24,88 +24,139 @@ actions:
     openIfAlreadyExists: false
 ```
 
-```dataviewjs
-const projectsFolder = "06 - Main Notes/Projects"; // adjust if needed
-const pages = dv.pages(`"${projectsFolder}"`)
-  // Optionally: filter only files that explicitly declare type: project in frontmatter
-  .where(p => (p.type && p.type.toLowerCase?.() === "project") || p.project_type);
-
-function joinIfArray(x){ return Array.isArray(x) ? x.join(", ") : (x ?? ""); }
-
-const rows = pages.map(p => {
-  const status = joinIfArray(p.status);
-  const priority = joinIfArray(p.priority);
-  const start = p.start_date ?? "";
-  const due = p.due_date ?? "";
-  const tasksArray = (p.file?.tasks ?? p.tasks ?? []);
-  const openCount = tasksArray.filter(t => !t.completed).length;
-  return {
-    link: p.file.link,
-    status,
-    priority,
-    start,
-    due,
-    openCount,
-    sortDue: String(p.due_date ?? "")
-  };
-});
-
-// sort by due (ascending, blank last)
-rows.sort((a,b) => {
-  if(!a.sortDue && !b.sortDue) return a.link.toString().localeCompare(b.link.toString());
-  if(!a.sortDue) return 1;
-  if(!b.sortDue) return -1;
-  return a.sortDue.localeCompare(b.sortDue);
-});
-
-dv.table(["Project","Status","Priority","Start", "Due","Open Tasks"],
-  rows.map(r => [r.link, r.status, r.priority, r.start, r.due, r.openCount])
-);
+```dataview
+TABLE
+  status AS Status,
+  priority AS Priority,
+  start_date AS Start,
+  due_date AS Due,
+  length(filter(file.tasks, (t) => !t.completed)) AS "Open Tasks"
+FROM "06 - Main Notes/Projects"
+WHERE type = "project" OR project_type
+SORT due_date ASC
 ```
 ## Task Lists
-### Project-Only Derived Tasks
+### Open Tasks
 ```dataviewjs
-const projPages = dv.pages(`"06 - Main Notes/Projects"`);
-
-let projTasks = [];
-projPages.forEach(p=>{
-  (p.file?.tasks ?? p.tasks ?? []).filter(t=>!t.completed).forEach(t=>{
-    projTasks.push([t.text, p.file.link, t.line ?? ""]);
-  });
-});
-
-if (projTasks.length) {
-  dv.table(["Task","Source Project","line"], projTasks);
-} else {
-  dv.paragraph("No open tasks inside project notes.");
-}
-```
-### Meetings-Only Derived Tasks
-```dataviewjs
+// === CONFIG ===
+const projectsFolder = "06 - Main Notes/Projects";
 const meetingsFolder = "06 - Main Notes/Meetings";
+const dailyFolder    = "06 - Main Notes/Daily Note"; // make sure spelling matches your vault
+  
+// If you only want active projects, set this to true and customize statuses below.
+const onlyActiveProjects = false;
+const completedStatuses = ["completed", "done", "closed"]; // adjust to your exact status values
+
+// === HELPERS ===
+const asArray = (x) => Array.isArray(x) ? x : (x ? [x] : []);
+const isProject = (p) =>
+  (p.type && String(p.type).toLowerCase() === "project") || p.project_type;
+const isActiveProject = (p) => {
+  const raw = asArray(p.status).map(s => String(s).toLowerCase());
+  return raw.length === 0 ? true : !raw.some(s => completedStatuses.includes(s));
+};
+const openTasks = (page) => asArray(page.file?.tasks ?? page.tasks).filter(t => !t.completed);
+
+// === PAGES ===
+const projects = dv.pages(`"${projectsFolder}"`)
+  .where(p => isProject(p))
+  .where(p => !onlyActiveProjects || isActiveProject(p))
+  .sort(p => p.due_date ?? dv.date("9999-12-31"), "asc"); // due-date sort, blanks last
 const meetings = dv.pages(`"${meetingsFolder}"`);
+const dailies  = dv.pages(`"${dailyFolder}"`);
 
-let meetingTasks = [];
-meetings.forEach(p=>{
-  const rpRaw = p.related_projects ?? [];
-  const rp = Array.isArray(rpRaw) ? rpRaw : (rpRaw ? [rpRaw] : []);
-  const tags = (p.file.tags ?? []);
-  const projectNames = [...rp, ...tags].map(x => String(x));
+// === RENDER ===
+let total = 0;
+for (const proj of projects) {
+  const projLink = proj.file.link;
+  // 1) tasks inside the project note itself
+  const fromProject = openTasks(proj);
+  // 2) tasks inside meeting notes linked to this project
+  const fromMeetings = meetings
+    .where(m => asArray(m.related_projects).some(rp => String(rp) === String(projLink)))
+    .flatMap(m => openTasks(m));
+  // 3) tasks inside daily notes linked to this project
+  const fromDailies = dailies
+    .where(d => asArray(d.related_projects).some(rp => String(rp) === String(projLink)))
+    .flatMap(d => openTasks(d));
+  const tasks = [...fromProject, ...fromMeetings, ...fromDailies];
 
-  (p.file?.tasks ?? p.tasks ?? []).filter(t=>!t.completed).forEach(t=>{
-    meetingTasks.push({
-      text: t.text,
-      source: p.file.link,
-      projects: projectNames.length ? projectNames.join(", ") : "(no related_project)",
-      line: t.line ?? ""
-    });
-  });
-});
-
-if (meetingTasks.length) {
-  // Optionally: you can sort by projects or source file here
-  dv.table(["Task","Meeting","Project(s)"], meetingTasks.map(x=>[x.text, x.source, x.projects]));
-} else {
-  dv.paragraph("No open tasks found in meeting notes.");
+  if (tasks.length) {
+    total += tasks.length;
+    dv.header(3, projLink);        // "### [[Project Alpha]]"
+    dv.taskList(tasks, false);     // show tasks (unchecked/checked not forced)
+  }
 }
+if (!total) dv.paragraph("No open tasks found across projects, meetings, or daily notes.");
+```
+### Completed Tasks
+```dataviewjs
+// === CONFIG ===
+
+const projectsFolder = "06 - Main Notes/Projects";
+const meetingsFolder = "06 - Main Notes/Meetings";
+const dailyFolder    = "06 - Main Notes/Daily Note";
+
+
+// Optional: keep the completed section from getting huge
+
+const limitCompletedPerProject = 200; // set null to show all
+
+const onlyActiveProjects = false; // usually FALSE for completed tasks; set TRUE if you want only active projects
+const completedStatuses = ["completed", "done", "closed"];
+  
+// === HELPERS ===
+
+const asArray = (x) => Array.isArray(x) ? x : (x ? [x] : []);
+const isProject = (p) =>
+  (p.type && String(p.type).toLowerCase() === "project") || p.project_type;
+
+const isActiveProject = (p) => {
+  const raw = asArray(p.status).map(s => String(s).toLowerCase());
+  return raw.length === 0 ? true : !raw.some(s => completedStatuses.includes(s));
+};
+
+const doneTasks = (page) => asArray(page.file?.tasks ?? page.tasks).filter(t => t.completed);
+
+
+// === PAGES ===
+
+const projects = dv.pages(`"${projectsFolder}"`)
+  .where(p => isProject(p))
+  .where(p => !onlyActiveProjects || isActiveProject(p))
+  .sort(p => p.due_date ?? dv.date("9999-12-31"), "asc");
+
+const meetings = dv.pages(`"${meetingsFolder}"`);
+const dailies  = dv.pages(`"${dailyFolder}"`);
+
+// === RENDER ===
+
+let total = 0;
+
+
+for (const proj of projects) {
+  const projLink = proj.file.link;  
+
+  const fromProject = doneTasks(proj);
+
+  const fromMeetings = meetings
+    .where(m => asArray(m.related_projects).some(rp => String(rp) === String(projLink)))
+    .flatMap(m => doneTasks(m));
+
+  const fromDailies = dailies
+    .where(d => asArray(d.related_projects).some(rp => String(rp) === String(projLink)))
+    .flatMap(d => doneTasks(d));
+
+  let tasks = [...fromProject, ...fromMeetings, ...fromDailies];
+
+  if (limitCompletedPerProject) tasks = tasks.slice(0, limitCompletedPerProject);
+
+  if (tasks.length) {
+    total += tasks.length;
+    dv.header(3, projLink);
+    dv.taskList(tasks, false);
+  }
+}
+
+if (!total) dv.paragraph("No completed tasks found across projects, meetings, or daily notes.");
 ```
