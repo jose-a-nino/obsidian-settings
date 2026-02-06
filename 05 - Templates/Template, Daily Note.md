@@ -5,7 +5,7 @@ tag: DailyNotes
 related_projects:
 summary:
 ---
-tags:: [[Daily MOC]]
+**Tags**:: [[Daily MOC]]
 # DAILY NOTE
 ## {{date: dddd, MMMM Do, YYYY}}
 
